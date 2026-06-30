@@ -1,49 +1,160 @@
 # AI Food Calorie Tracker
 
-A real-time Computer Vision application that uses **Deep Learning (YOLOv8)** to identify food items through a webcam and instantly calculate nutritional data.
+A real-time Computer Vision application that uses a **two-stage deep learning pipeline** to identify food items through a webcam (or uploaded image) and instantly calculate nutritional data.
 
 ---
 
 ## 🚀 Key Features
-- **Neural Network Detection**: Uses a Convolutional Neural Network (CNN) to distinguish between 80+ objects.
-- **Human-Object Separation**: Solved the "Human Banana" problem—the AI identifies people and fruits separately to prevent false positives.
-- **Smart Logic**: Prevents calorie double-counting by tracking unique items per session.
-- **High Performance**: Optimized for 30+ FPS using Tkinter's `after()` loop for smooth video.
+
+- **Stage 1 – YOLO Detection**: YOLOv8n localises bounding boxes for food items in real time.
+- **Stage 2 – Food-101 Classification**: A ViT model fine-tuned on Food-101 re-classifies each crop into one of **101 food categories** for fine-grained identification.
+- **Custom 15-Class Training**: Train a YOLOv8n model on 15 selected Food-101 classes for direct detection.
+- **Nutrition Database Lookup**: Calories, protein, fat, and carbs from a local JSON database with optional live lookup via the **USDA FoodData Central API**.
+- **Smart Deduplication**: Prevents calorie double-counting by tracking unique items per session.
+- **Per-item Breakdown**: Sidebar shows each detected food with calories, serving size, and macros.
+- **Daily Goal Progress Bar**: Visual progress towards a 2 000 kcal daily goal.
+- **Upload Image**: Analyse a static photo in addition to live webcam.
+- **In-App Training**: Train the YOLO model directly from the GUI with live progress.
 
 ---
 
-## 🍕 Calorie Reference Table
-The application identifies these common items and maps them to their average caloric values:
+## 🏗️ Architecture
 
-| Food Item | AI Label | Calories (kcal) | Serving Size |
-| :--- | :--- | :--- | :--- |
-| **Banana** | `banana` | 105 | 1 Medium |
-| **Orange** | `orange` | 62 | 1 Medium |
-| **Apple** | `apple` | 95 | 1 Medium |
-| **Pizza** | `pizza` | 285 | 1 Slice |
-| **Burger** | `sandwich` | 350 | 1 Unit |
-| **Hot Dog** | `hot dog` | 150 | 1 Unit |
-| **Cake** | `cake` | 250 | 1 Slice |
-| **Broccoli** | `broccoli` | 50 | 1 Cup |
+```
+Webcam / Uploaded Image
+        │
+        ▼
+ ┌──────────────────┐
+ │  YOLOv8n         │  ← Stage 1: object detection
+ │  (custom or COCO)│     15 food classes (trained) or 80 COCO classes (fallback)
+ └──────────────────┘
+        │  food-adjacent bounding boxes
+        ▼
+ ┌──────────────────────────────┐
+ │  ViT Food-101 Classifier     │  ← Stage 2: fine-grained food ID (101 classes)
+ │  (nateraw/food, HuggingFace) │     runs in background thread
+ └──────────────────────────────┘
+        │  food label (e.g. "pizza")
+        ▼
+ ┌──────────────────────────────┐
+ │  Nutrition DB Lookup         │  ← nutrition_db.py
+ │  local JSON → USDA API       │     3-tier: cache → local → API
+ └──────────────────────────────┘
+        │  {calories, protein, fat, carbs, serving_g}
+        ▼
+ ┌──────────────────────────────┐
+ │  Tkinter UI                  │  ← sidebar + progress bar + training popup
+ └──────────────────────────────┘
+```
 
+---
 
+## 📁 Project Structure
 
-https://github.com/user-attachments/assets/32306d42-8ebb-4ad4-a61e-77339df57bf5
+```
+food-calorie-detector/
+├── main.py                ← Application entry point (GUI + detection loop)
+├── classifier.py          ← Food-101 ViT classifier wrapper
+├── nutrition_db.py        ← Nutrition lookup (local JSON + USDA API)
+├── nutrition_data.json    ← Local nutrition database (101 classes + extras)
+├── prepare_dataset.py     ← Dataset preparation (train/val split + YOLO labels)
+├── train_model.py         ← YOLOv8n training script
+├── requirements.txt       ← Python dependencies
+├── food-101-overview.ipynb← Exploratory notebook
+├── reference_images/      ← Sample images (apple, banana, orange)
+│   ├── apple/
+│   ├── banana/
+│   └── orange/
+├── models/                ← Trained model weights (auto-created)
+│   └── best.pt            ← Custom YOLOv8n (after training)
+├── food-101/              ← Dataset (auto-created by download/prepare scripts)
+│   ├── images/
+│   │   ├── train/         ← 80% split (12,000 images)
+│   │   └── val/           ← 20% split (3,000 images)
+│   └── labels/
+│       ├── train/
+│       └── val/
+├── LICENSE
+├── README.md
+└── .gitignore
+```
 
+---
 
+## 🎯 15 Training Classes
 
+The custom YOLO model is trained on these Food-101 classes:
+
+| # | Class | Calories (per 100g) |
+|---|---|---|
+| 0 | apple_pie | 237 kcal |
+| 1 | chicken_curry | 150 kcal |
+| 2 | chicken_wings | 290 kcal |
+| 3 | dumplings | 232 kcal |
+| 4 | french_toast | 229 kcal |
+| 5 | fried_calamari | 175 kcal |
+| 6 | fried_rice | 163 kcal |
+| 7 | garlic_bread | 287 kcal |
+| 8 | hamburger | 295 kcal |
+| 9 | hot_and_sour_soup | 40 kcal |
+| 10 | omelette | 154 kcal |
+| 11 | pancakes | 227 kcal |
+| 12 | pizza | 266 kcal |
+| 13 | samosa | 262 kcal |
+| 14 | spring_rolls | 200 kcal |
 
 ---
 
 ## 🛠️ Installation & Setup
 
-<<<<<<< HEAD
 ### Prerequisites
-Ensure you have Python installed. Then, install the required libraries:
+Python 3.9+ is required.
+
 ```bash
-pip install ultralytics opencv-python pillow
-=======
-1. **Clone the repository**:
-   ```bash
-   git clone [https://github.com/Bhuvan1326/food-calorie-detector.git](https://github.com/Bhuvan1326/food-calorie-detector.git)
->>>>>>> 9ad54a5 (Update README with Calorie Table and Technical explanation)
+pip install -r requirements.txt
+```
+
+> **Note**: First run downloads the Food-101 ViT model (~350 MB) from HuggingFace Hub. Subsequent runs use the local cache.
+
+### Run the App
+
+```bash
+python main.py
+```
+
+### Train the Custom Model (Optional)
+
+```bash
+# Step 1: Prepare dataset (train/val split + labels)
+python prepare_dataset.py
+
+# Step 2: Train YOLOv8n (GPU recommended)
+python train_model.py
+```
+
+Training parameters: `epochs=20, imgsz=224, batch=16, patience=5`
+
+> **Tip**: CPU training takes 5-7 hours. Use Google Colab (free GPU) for faster training, then copy `best.pt` to `models/`.
+
+---
+
+## 🌐 USDA API (Optional)
+
+For live nutrition data beyond the local database, obtain a free API key at
+[fdc.nal.usda.gov](https://fdc.nal.usda.gov/api-guide.html) and set:
+
+```bash
+set USDA_API_KEY=your_key_here   # Windows
+```
+
+Without a key, `DEMO_KEY` is used (1 000 requests/hour, no registration needed).
+
+---
+
+## 🔧 Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `DAILY_CALORIE_GOAL` | `2000` | Daily kcal goal for progress bar |
+| `classifier.CONFIDENCE_THRESHOLD` | `0.25` | Minimum Food-101 confidence to use classifier result |
+| `USDA_API_KEY` env var | `DEMO_KEY` | USDA FoodData Central API key |
