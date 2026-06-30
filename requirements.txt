@@ -1,4 +1,45 @@
-ultralytics
+# ── Core CV & UI ──────────────────────────────────────────────────────────────
 opencv-python
-pillow
 numpy
+pillow
+
+# ── Deep learning ──────────────────────────────────────────────────────────────
+torch
+torchvision
+# torchaudio is intentionally omitted — its DLL causes crashes on some Windows
+# setups and is not required by any module in this project.
+
+# ── YOLO — object detection and Food-101 training ─────────────────────────────
+ultralytics
+
+# ── Nutrition database ─────────────────────────────────────────────────────────
+requests          # USDA FoodData Central API (optional live lookup)
+pyyaml            # YAML read/write for food101.yaml
+
+# ── Dataset preparation & training utilities ───────────────────────────────────
+tqdm              # progress bars in prepare_dataset.py
+python-dotenv     # load USDA_API_KEY from .env file
+
+# ── Data science (used in the notebook and optional analysis) ──────────────────
+pandas
+scikit-learn
+scipy
+matplotlib
+
+# ── Optional: HuggingFace Food-101 classifier (Stage 2) ───────────────────────
+# DISABLED — torchaudio DLL causes crashes on some Windows installations.
+# The project now uses the custom-trained YOLOv8 model (models/best.pt) directly.
+# Uncomment only if your system has a working torchaudio installation:
+# transformers
+# huggingface-hub
+# torchaudio
+# timm
+# einops
+
+# ── Optional: FastAPI inference server ────────────────────────────────────────
+# fastapi
+# uvicorn
+# python-multipart
+
+# ── Optional: advanced image augmentation (training experiments) ───────────────
+# albumentations
