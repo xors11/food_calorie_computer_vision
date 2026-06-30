@@ -20,9 +20,12 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 from typing import Optional
+
+logger = logging.getLogger("FoodTracker.NutritionDB")
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -67,6 +70,7 @@ _db_loaded = False
 # ---------------------------------------------------------------------------
 
 def _load_local_db() -> None:
+    """Load the local JSON database and persistent API cache (once)."""
     global _local_db, _db_loaded
     if _db_loaded:
         return
@@ -77,8 +81,11 @@ def _load_local_db() -> None:
         _local_db = {k: v for k, v in raw.items()
                      if not k.startswith("_") and isinstance(v, dict)}
     except Exception as e:
-        print(f"[NutritionDB] Could not load local DB: {e}")
+        logger.warning("Could not load local DB: %s", e)
         _local_db = {}
+
+    # P7 fix: load the persistent API cache once here instead of on every miss
+    _load_api_cache()
     _db_loaded = True
 
 
@@ -97,7 +104,7 @@ def _save_api_cache() -> None:
         with open(_API_CACHE_PATH, "w", encoding="utf-8") as f:
             json.dump(_api_cache, f, indent=2)
     except Exception as e:
-        print(f"[NutritionDB] Could not save API cache: {e}")
+        logger.warning("Could not save API cache: %s", e)
 
 
 def normalize(label: str) -> str:
@@ -157,7 +164,7 @@ def _query_usda(query: str) -> Optional[dict]:
             "source": "USDA",
         }
     except Exception as e:
-        print(f"[NutritionDB] USDA query failed for '{query}': {e}")
+        logger.warning("USDA query failed for '%s': %s", query, e)
         return None
 
 
@@ -198,8 +205,7 @@ def get_nutrition(food_label: str) -> dict:
             _runtime_cache[key] = result
             return result
 
-    # 4. Persistent API cache (from a previous session)
-    _load_api_cache()
+    # 4. Persistent API cache (loaded once during init)
     if key in _api_cache:
         _runtime_cache[key] = _api_cache[key]
         return _api_cache[key]
@@ -215,7 +221,7 @@ def get_nutrition(food_label: str) -> dict:
         return result
 
     # 6. Hard fallback
-    print(f"[NutritionDB] No data found for '{food_label}', using defaults.")
+    logger.info("No nutrition data for '%s' — using defaults.", food_label)
     fallback = dict(DEFAULT_NUTRITION)
     _runtime_cache[key] = fallback
     return fallback

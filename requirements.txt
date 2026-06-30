@@ -26,16 +26,6 @@ scikit-learn
 scipy
 matplotlib
 
-# ── Optional: HuggingFace Food-101 classifier (Stage 2) ───────────────────────
-# DISABLED — torchaudio DLL causes crashes on some Windows installations.
-# The project now uses the custom-trained YOLOv8 model (models/best.pt) directly.
-# Uncomment only if your system has a working torchaudio installation:
-# transformers
-# huggingface-hub
-# torchaudio
-# timm
-# einops
-
 # ── Optional: FastAPI inference server ────────────────────────────────────────
 # fastapi
 # uvicorn

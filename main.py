@@ -19,9 +19,29 @@ Nutrition data: built-in dict (all 101 Food-101 classes, kcal per 100 g)
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Logging configuration
+# ──────────────────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("FoodTracker")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Optional nutrition_db — imported once at module level (P10 fix)
+# ──────────────────────────────────────────────────────────────────────────────
+try:
+    import nutrition_db as _nutrition_db
+except ImportError:
+    _nutrition_db = None
+    logger.info("nutrition_db module not available — using built-in calorie table.")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Built-in calorie reference — kcal per 100 g — all 101 Food-101 classes
@@ -95,6 +115,12 @@ BORDER     = "#2a2a4a"
 BOX_BGR    = (120, 220, 100)    # OpenCV bounding-box colour (BGR green)
 DAILY_GOAL = 2000               # kcal daily target
 
+# ── Detection loop timing ─────────────────────────────────────────────────────
+# 33ms ≈ 30 FPS ceiling; YOLO inference itself typically takes 50-200ms so
+# the real frame rate is bounded by the model.  Previous value (15ms) caused
+# unnecessary CPU churn in the Tkinter event loop.
+LOOP_INTERVAL_MS = 33
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Shared helpers
@@ -103,16 +129,16 @@ DAILY_GOAL = 2000               # kcal daily target
 def get_calories(label: str) -> int:
     """
     Return kcal per 100 g for a food label.
-    Prefers nutrition_db.py (if present); falls back to built-in dict.
+    Prefers nutrition_db (if available); falls back to built-in dict.
     """
-    try:
-        import nutrition_db                             # noqa: PLC0415
-        info = nutrition_db.get_nutrition(label)
-        cal  = info.get("calories", 0)
-        if cal > 0:
-            return int(cal)
-    except Exception:
-        pass
+    if _nutrition_db is not None:
+        try:
+            info = _nutrition_db.get_nutrition(label)
+            cal  = info.get("calories", 0)
+            if cal > 0:
+                return int(cal)
+        except Exception:
+            pass
     return FOOD_CALORIES_PER_100G.get(label, 200)
 
 
@@ -123,11 +149,14 @@ def load_model():
     """
     from ultralytics import YOLO                        # noqa: PLC0415
     if CUSTOM_MODEL.exists():
-        print(f"[Model] ✓ Loaded Food-101 model: {CUSTOM_MODEL}")
+        logger.info("Loaded Food-101 model: %s", CUSTOM_MODEL)
         return YOLO(str(CUSTOM_MODEL)), True
     else:
-        print(f"[Model] ℹ  models/best.pt not found — using COCO fallback ({COCO_FALLBACK}).")
-        print("[Model]    Run  python train_model.py  to enable 101-class detection.")
+        logger.warning(
+            "models/best.pt not found — using COCO fallback (%s). "
+            "Run  python train_model.py  to enable 101-class detection.",
+            COCO_FALLBACK,
+        )
         return YOLO(COCO_FALLBACK), False
 
 
@@ -215,7 +244,7 @@ class FoodCalorieTracker:
     Real-time food calorie tracker with Tkinter UI.
 
     Preserved public method names: setup_ui(), reset(), update_loop()
-    Removed: HuggingFace / transformers dependency (caused the torchaudio crash).
+    Single inference pipeline: YOLOv8 → food label → nutrition DB → calories.
     """
 
     def __init__(self, root) -> None:
@@ -236,11 +265,16 @@ class FoodCalorieTracker:
         # detected_items: label → {"display": str, "calories": int}
         self.detected_items: dict[str, dict] = {}
         self.static_frame  = None          # set by upload_image()
-        
+        # P5 fix: avoid re-running inference on the same static image every loop
+        self._static_processed = False
+        self._static_annotated = None
+
         import queue
         self.train_queue = queue.Queue()
         self.train_proc = None
         self.is_training_cancelled = False
+        # P9 fix: dynamic epoch tracking (updated from training output)
+        self._train_total_epochs = 20
 
         self.setup_ui()
 
@@ -250,7 +284,37 @@ class FoodCalorieTracker:
                 text="⚠ Webcam not found. Use Upload Image to analyse a file.",
                 fg=WARNING_C,
             )
+
+        # P6 fix: register explicit cleanup on window close instead of
+        # relying on the unreliable __del__ destructor
+        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+
         self.update_loop()
+
+    # ── Proper cleanup on window close (P6 fix) ──────────────────────────────
+
+    def _on_closing(self) -> None:
+        """Release webcam and destroy the Tkinter window."""
+        logger.info("Shutting down — releasing resources.")
+        try:
+            if hasattr(self, "cap") and self.cap is not None and self.cap.isOpened():
+                self.cap.release()
+                logger.info("Webcam released.")
+        except Exception as exc:
+            logger.warning("Error releasing webcam: %s", exc)
+
+        # Kill any in-progress training subprocess
+        if hasattr(self, "train_proc") and self.train_proc is not None:
+            try:
+                self.train_proc.terminate()
+                self.train_proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self.train_proc.kill()
+                except Exception:
+                    pass
+
+        self.root.destroy()
 
     # ── UI construction (preserved method name) ───────────────────────────────
 
@@ -404,6 +468,9 @@ class FoodCalorieTracker:
         self.total_calories = 0.0
         self.detected_items.clear()
         self.static_frame = None
+        # Reset static frame cache so next upload triggers inference
+        self._static_processed = False
+        self._static_annotated = None
         self._refresh_sidebar()
         self.total_label.config(text="0 kcal", fg=SUCCESS)
         self.prog_bar.place(relwidth=0.0)
@@ -425,6 +492,9 @@ class FoodCalorieTracker:
             frame = self.cv2.imread(path)
             if frame is not None:
                 self.static_frame = frame
+                # Mark as unprocessed so update_loop() runs inference once
+                self._static_processed = False
+                self._static_annotated = None
                 self.status_label.config(
                     text=f"Image loaded: {Path(path).name}", fg=TEXT_SEC
                 )
@@ -439,18 +509,30 @@ class FoodCalorieTracker:
         from PIL import Image, ImageTk                  # noqa: PLC0415
 
         frame = None
+
         if self.static_frame is not None:
-            frame = self.static_frame.copy()
+            if self._static_processed and self._static_annotated is not None:
+                # P5 fix: static image already processed — just redisplay the
+                # cached annotated frame without re-running YOLO inference.
+                frame = self._static_annotated
+            else:
+                # First time seeing this static image — run inference
+                frame = self.static_frame.copy()
+                results = self.model(frame, conf=0.35, verbose=False)
+                frame   = self._process_detections(frame, results)
+                # Cache the annotated result
+                self._static_annotated = frame.copy()
+                self._static_processed = True
         elif self.cap is not None and self.cap.isOpened():
             ret, cam = self.cap.read()
             if ret:
                 frame = cam
+                # Live webcam: run inference on every frame
+                results = self.model(frame, conf=0.35, verbose=False)
+                frame   = self._process_detections(frame, results)
 
         if frame is not None:
-            results = self.model(frame, conf=0.35, verbose=False)
-            frame   = self._process_detections(frame, results)
-
-            # Convert + display
+            # Convert BGR → RGB and display in Tkinter
             rgb   = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2RGB)
             pil   = Image.fromarray(rgb)
             lw    = max(self.video_label.winfo_width(),  640)
@@ -463,7 +545,8 @@ class FoodCalorieTracker:
             n = len(self.detected_items)
             self.count_label.config(text=f"{n} item{'s' if n != 1 else ''}")
 
-        self.root.after(15, self.update_loop)
+        # P4 fix: 33ms (~30 FPS ceiling) instead of 15ms (~66 FPS)
+        self.root.after(LOOP_INTERVAL_MS, self.update_loop)
 
     # ── Detection logic ───────────────────────────────────────────────────────
 
@@ -518,11 +601,10 @@ class FoodCalorieTracker:
         if sidebar_dirty:
             self._refresh_sidebar()
             self._refresh_totals()
-            print("\n--- Detected Ingredients ---")
+            logger.info("--- Detected Ingredients ---")
             for lbl, info in self.detected_items.items():
-                print(f"  - {info['display']}: {info['calories']} kcal/100g")
-            print(f"Total Estimated Calories (per 100g each): {self.total_calories:.1f} kcal")
-            print("----------------------------")
+                logger.info("  - %s: %d kcal/100g", info['display'], info['calories'])
+            logger.info("Total Estimated Calories (per 100g each): %.1f kcal", self.total_calories)
 
         return frame
 
@@ -565,6 +647,7 @@ class FoodCalorieTracker:
         self.prog_bar.place(relwidth=frac)
         self.prog_bar.config(bg=bar_color)
 
+    # ── Training popup ────────────────────────────────────────────────────────
 
     def open_train_popup(self) -> None:
         import tkinter as tk
@@ -576,6 +659,8 @@ class FoodCalorieTracker:
 
         self.train_btn.config(state="disabled")
         self.is_training_cancelled = False
+        # Reset dynamic epoch count for this training run
+        self._train_total_epochs = 20
 
         self.train_popup = tk.Toplevel(self.root)
         self.train_popup.title("Training YOLOv8n Model")
@@ -600,7 +685,7 @@ class FoodCalorieTracker:
         status_f = tk.Frame(self.train_popup, bg=BG_SIDEBAR)
         status_f.pack(fill="x", padx=20, pady=5)
 
-        self.epoch_var = tk.StringVar(value="Epoch: 0/20")
+        self.epoch_var = tk.StringVar(value="Epoch: 0/?")
         tk.Label(
             status_f, textvariable=self.epoch_var,
             font=("Segoe UI", 11, "bold"), bg=BG_SIDEBAR, fg=ACCENT_L
@@ -612,10 +697,10 @@ class FoodCalorieTracker:
             font=("Segoe UI", 11, "bold"), bg=BG_SIDEBAR, fg=SUCCESS
         ).pack(side="right")
 
-        # Progress bar
+        # Progress bar — initial maximum is a guess; updated dynamically
         self.train_progress = ttk.Progressbar(
             self.train_popup, orient="horizontal",
-            length=560, mode="determinate", maximum=20
+            length=560, mode="determinate", maximum=self._train_total_epochs
         )
         self.train_progress.pack(fill="x", padx=20, pady=10)
 
@@ -772,12 +857,23 @@ class FoodCalorieTracker:
             self.root.after(100, self.check_training_queue)
 
     def parse_training_line(self, line: str) -> None:
+        """
+        Parse epoch and loss from YOLO training output.
+        P9 fix: uses dynamic epoch count (\d+)/(\d+) instead of hardcoded /20.
+        """
         import re
-        # Match epoch progress, e.g. "  5/20"
-        epoch_match = re.search(r'\b(\d+)/20\b', line)
+        # Match epoch progress, e.g. "  5/20" or "  12/100"
+        epoch_match = re.search(r'\b(\d+)/(\d+)\b', line)
         if epoch_match:
             epoch = int(epoch_match.group(1))
-            self.epoch_var.set(f"Epoch: {epoch}/20")
+            total = int(epoch_match.group(2))
+
+            # Update total epochs if the parsed value changed
+            if total != self._train_total_epochs:
+                self._train_total_epochs = total
+                self.train_progress.configure(maximum=total)
+
+            self.epoch_var.set(f"Epoch: {epoch}/{total}")
             self.train_progress["value"] = epoch
 
             # Try to parse loss (the next float elements in the line)
@@ -839,10 +935,6 @@ class FoodCalorieTracker:
             self.log_text.insert("end", message)
             self.log_text.see("end")
             self.log_text.configure(state="disabled")
-
-    def __del__(self) -> None:
-        if hasattr(self, "cap") and self.cap:
-            self.cap.release()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -1,13 +1,12 @@
 # AI Food Calorie Tracker
 
-A real-time Computer Vision application that uses a **two-stage deep learning pipeline** to identify food items through a webcam (or uploaded image) and instantly calculate nutritional data.
+A real-time Computer Vision application that uses **YOLOv8** to identify food items through a webcam (or uploaded image) and instantly calculate nutritional data.
 
 ---
 
 ## 🚀 Key Features
 
-- **Stage 1 – YOLO Detection**: YOLOv8n localises bounding boxes for food items in real time.
-- **Stage 2 – Food-101 Classification**: A ViT model fine-tuned on Food-101 re-classifies each crop into one of **101 food categories** for fine-grained identification.
+- **YOLO Detection**: YOLOv8n detects and classifies food items in real time — either using a custom-trained Food-101 model or the COCO pretrained fallback.
 - **Custom 15-Class Training**: Train a YOLOv8n model on 15 selected Food-101 classes for direct detection.
 - **Nutrition Database Lookup**: Calories, protein, fat, and carbs from a local JSON database with optional live lookup via the **USDA FoodData Central API**.
 - **Smart Deduplication**: Prevents calorie double-counting by tracking unique items per session.
@@ -24,27 +23,21 @@ A real-time Computer Vision application that uses a **two-stage deep learning pi
 Webcam / Uploaded Image
         │
         ▼
- ┌──────────────────┐
- │  YOLOv8n         │  ← Stage 1: object detection
- │  (custom or COCO)│     15 food classes (trained) or 80 COCO classes (fallback)
- └──────────────────┘
-        │  food-adjacent bounding boxes
+ ┌──────────────────────────┐
+ │  YOLOv8n                 │  ← Object detection + classification
+ │  (custom or COCO)        │     15 food classes (trained) or 80 COCO classes (fallback)
+ └──────────────────────────┘
+        │  food label + bounding box
         ▼
- ┌──────────────────────────────┐
- │  ViT Food-101 Classifier     │  ← Stage 2: fine-grained food ID (101 classes)
- │  (nateraw/food, HuggingFace) │     runs in background thread
- └──────────────────────────────┘
-        │  food label (e.g. "pizza")
-        ▼
- ┌──────────────────────────────┐
- │  Nutrition DB Lookup         │  ← nutrition_db.py
- │  local JSON → USDA API       │     3-tier: cache → local → API
- └──────────────────────────────┘
+ ┌──────────────────────────┐
+ │  Nutrition DB Lookup     │  ← nutrition_db.py
+ │  local JSON → USDA API   │     3-tier: cache → local → API
+ └──────────────────────────┘
         │  {calories, protein, fat, carbs, serving_g}
         ▼
- ┌──────────────────────────────┐
- │  Tkinter UI                  │  ← sidebar + progress bar + training popup
- └──────────────────────────────┘
+ ┌──────────────────────────┐
+ │  Tkinter UI              │  ← sidebar + progress bar + training popup
+ └──────────────────────────┘
 ```
 
 ---
@@ -54,7 +47,6 @@ Webcam / Uploaded Image
 ```
 food-calorie-detector/
 ├── main.py                ← Application entry point (GUI + detection loop)
-├── classifier.py          ← Food-101 ViT classifier wrapper
 ├── nutrition_db.py        ← Nutrition lookup (local JSON + USDA API)
 ├── nutrition_data.json    ← Local nutrition database (101 classes + extras)
 ├── prepare_dataset.py     ← Dataset preparation (train/val split + YOLO labels)
@@ -114,8 +106,6 @@ Python 3.9+ is required.
 pip install -r requirements.txt
 ```
 
-> **Note**: First run downloads the Food-101 ViT model (~350 MB) from HuggingFace Hub. Subsequent runs use the local cache.
-
 ### Run the App
 
 ```bash
@@ -155,6 +145,6 @@ Without a key, `DEMO_KEY` is used (1 000 requests/hour, no registration needed).
 
 | Variable | Default | Description |
 |---|---|---|
-| `DAILY_CALORIE_GOAL` | `2000` | Daily kcal goal for progress bar |
-| `classifier.CONFIDENCE_THRESHOLD` | `0.25` | Minimum Food-101 confidence to use classifier result |
+| `DAILY_GOAL` | `2000` | Daily kcal goal for progress bar |
+| `LOOP_INTERVAL_MS` | `33` | Detection loop interval in ms (~30 FPS ceiling) |
 | `USDA_API_KEY` env var | `DEMO_KEY` | USDA FoodData Central API key |
