@@ -6,7 +6,7 @@ Trains YOLOv8n on the Food-101 dataset prepared by prepare_dataset.py.
 
 Usage:
   python train_model.py
-  python train_model.py --epochs 100 --batch 16 --imgsz 320 --device cpu
+  python train_model.py --epochs 50 --batch 16 --imgsz 416 --device cpu
 
 Prerequisites:
   1. Run  python prepare_dataset.py  to generate labels and food101.yaml
@@ -41,11 +41,12 @@ def main() -> None:
         description="Train YOLOv8n on Food-101",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--epochs",  type=int,   default=20,
+    # M1 improvements: epochs 20 -> 50, imgsz 224 -> 416, patience 5 -> 10
+    parser.add_argument("--epochs",  type=int,   default=50,
                         help="Number of training epochs")
     parser.add_argument("--batch",   type=int,   default=16,
                         help="Batch size (reduce to 8 if GPU OOM)")
-    parser.add_argument("--imgsz",   type=int,   default=224,
+    parser.add_argument("--imgsz",   type=int,   default=416,
                         help="Input image size (pixels, square)")
     parser.add_argument("--weights", type=str,   default="yolov8n.pt",
                         help="Pretrained YOLOv8 weights to start from")
@@ -53,10 +54,12 @@ def main() -> None:
                         help="Device: 'cpu', '0', etc.")
     parser.add_argument("--workers", type=int,   default=0,
                         help="DataLoader worker threads (0 = safe on Windows)")
-    parser.add_argument("--patience",type=int,   default=5,
+    parser.add_argument("--patience",type=int,   default=10,
                         help="Early-stopping patience (epochs without improvement)")
-    parser.add_argument("--lr",      type=float, default=1e-3,
-                        help="Initial learning rate")
+    parser.add_argument("--lr",      type=float, default=1e-2,
+                        help="Initial learning rate (YOLO default 1e-2)")
+    parser.add_argument("--resume",  action="store_true",
+                        help="Resume training from last checkpoint")
     args = parser.parse_args()
 
     # ── Pre-checks ────────────────────────────────────────────────────────────
@@ -111,7 +114,7 @@ def main() -> None:
 
     # ── Print config ──────────────────────────────────────────────────────────
     print("=" * 60)
-    print("  YOLOv8n — Food-101 Training")
+    print("  YOLOv8n — Food-101 Training (Optimized)")
     print("=" * 60)
     print(f"  Weights  : {args.weights}")
     print(f"  Data     : {YAML_PATH}")
@@ -121,43 +124,64 @@ def main() -> None:
     print(f"  Device   : {args.device}")
     print(f"  Workers  : {workers}")
     print(f"  LR0      : {args.lr}")
+    print(f"  Resume   : {args.resume}")
     print("=" * 60)
     print()
 
     # ── Train ─────────────────────────────────────────────────────────────────
-    model = YOLO(args.weights)
-
-    model.train(
-        data=str(YAML_PATH),
-        epochs=args.epochs,
-        imgsz=args.imgsz,
-        batch=args.batch,
-        workers=workers,
-        device=args.device,
-        project=str(RUNS_DIR),
-        name="food101",
-        exist_ok=True,                # allow re-running / resuming
-        pretrained=True,
-        optimizer="AdamW",
-        lr0=args.lr,
-        lrf=0.01,                     # final lr = lr0 * lrf
-        patience=args.patience,
-        cache=False,                  # set True to cache images in RAM for speed
-        verbose=True,
-        plots=True,                   # save training plots to runs/food101/
-    )
+    if args.resume:
+        # Load last checkpoint if resuming
+        last_checkpoint = RUNS_DIR / "food101" / "weights" / "last.pt"
+        if last_checkpoint.exists():
+            model = YOLO(str(last_checkpoint))
+            print(f"Resuming from checkpoint: {last_checkpoint}")
+            model.train(resume=True)
+        else:
+            print(f"ERROR: Last checkpoint not found at {last_checkpoint}. Cannot resume.")
+            sys.exit(1)
+    else:
+        model = YOLO(args.weights)
+        # Apply standard food augmentations (Mosaic, MixUp, HSV) and Cosine LR
+        model.train(
+            data=str(YAML_PATH),
+            epochs=args.epochs,
+            imgsz=args.imgsz,
+            batch=args.batch,
+            workers=workers,
+            device=args.device,
+            project=str(RUNS_DIR),
+            name="food101",
+            exist_ok=True,
+            pretrained=True,
+            optimizer="AdamW",
+            lr0=args.lr,
+            lrf=0.01,
+            cos_lr=True,              # M1: Use Cosine LR schedule
+            patience=args.patience,
+            cache=True,               # M1: Cache images for speed
+            verbose=True,
+            plots=True,
+            # Augmentations:
+            mosaic=1.0,
+            mixup=0.1,
+            hsv_h=0.015,
+            hsv_s=0.5,
+            hsv_v=0.3,
+            flipud=0.0,
+            fliplr=0.5,
+            scale=0.5,
+        )
 
     # ── Copy best checkpoint to models/best.pt ────────────────────────────────
     best_src = RUNS_DIR / "food101" / "weights" / "best.pt"
 
     if not best_src.exists():
-        # Fallback: search recursively (Ultralytics may use a numbered sub-dir)
+        # Fallback: search recursively
         candidates = sorted(RUNS_DIR.rglob("best.pt"))
         if candidates:
             best_src = candidates[-1]
         else:
-            print("\nWARNING: best.pt not found in runs/. "
-                  "Check runs/ directory manually.")
+            print("\nWARNING: best.pt not found in runs/. Check runs/ directory manually.")
             return
 
     shutil.copy(str(best_src), str(FINAL_MODEL))

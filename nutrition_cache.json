@@ -1,0 +1,20 @@
+{
+  "unknown_item": {
+    "calories": 467.0,
+    "protein": 6.8,
+    "fat": 25.2,
+    "carbs": 53.2,
+    "serving_g": 100,
+    "serving_desc": "per 100 g (USDA)",
+    "source": "USDA"
+  },
+  "xyz_gibberish_food_abc": {
+    "calories": 389.0,
+    "protein": 16.9,
+    "fat": 6.9,
+    "carbs": 66.3,
+    "serving_g": 100,
+    "serving_desc": "per 100 g (USDA)",
+    "source": "USDA"
+  }
+}

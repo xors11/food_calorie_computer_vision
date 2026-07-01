@@ -1,150 +1,115 @@
-# AI Food Calorie Tracker
+# Production-Ready AI Food Calorie Tracker
 
-A real-time Computer Vision application that uses **YOLOv8** to identify food items through a webcam (or uploaded image) and instantly calculate nutritional data.
-
----
-
-## 🚀 Key Features
-
-- **YOLO Detection**: YOLOv8n detects and classifies food items in real time — either using a custom-trained Food-101 model or the COCO pretrained fallback.
-- **Custom 15-Class Training**: Train a YOLOv8n model on 15 selected Food-101 classes for direct detection.
-- **Nutrition Database Lookup**: Calories, protein, fat, and carbs from a local JSON database with optional live lookup via the **USDA FoodData Central API**.
-- **Smart Deduplication**: Prevents calorie double-counting by tracking unique items per session.
-- **Per-item Breakdown**: Sidebar shows each detected food with calories, serving size, and macros.
-- **Daily Goal Progress Bar**: Visual progress towards a 2 000 kcal daily goal.
-- **Upload Image**: Analyse a static photo in addition to live webcam.
-- **In-App Training**: Train the YOLO model directly from the GUI with live progress.
+A modular, real-time Computer Vision application that uses **YOLOv8** to identify food items via a webcam (or uploaded image) and estimates portion size and complete nutritional profiles.
 
 ---
 
-## 🏗️ Architecture
+## 🍽️ Features & Production Upgrades
+
+- **Optimised YOLO Inference**: Custom-tuned confidence (0.45) and IoU NMS (0.50) thresholds to eliminate false positives and merge duplicates.
+- **Webcam Temporal Smoothing**: Implements a sliding window queue filter preventing single-frame detection flickers.
+- **Portion Size Estimation**: Evaluates bounding box area relative to the frame size to estimate multipliers (0.5×, 1.0×, 1.5×, 2.0×) and scale calories/macros accordingly.
+- **Multi-Food deduplication**: Handles spatial deduplication correctly (e.g. counts two distinct pizzas as two separate items rather than skipping duplicates).
+- **Full Macro Breakdown**: Tracks Calories, Protein, Fat, Carbohydrates, Fiber, Sugar, and Sodium.
+- **Modernized Dark Theme GUI**: Displays real-time FPS, device engine badge (CPU vs GPU name), confidence status tags (HIGH/MED/LOW), meal totals, and custom progress indicators.
+- **Modular Software Design**: Refactored into a structured Python package (`app/`) for strict separation of detection, nutrition, serving estimation, and UI layers.
+
+---
+
+## 🏗️ Architecture Diagram
 
 ```
-Webcam / Uploaded Image
+ Webcam / Image File
         │
         ▼
- ┌──────────────────────────┐
- │  YOLOv8n                 │  ← Object detection + classification
- │  (custom or COCO)        │     15 food classes (trained) or 80 COCO classes (fallback)
- └──────────────────────────┘
-        │  food label + bounding box
+ ┌──────────────┐
+ │ FoodDetector │  ← app/detector.py (YOLOv8 + FP16 + NMS + Temporal Smoothing)
+ └──────────────┘
+        │ Stable Detection objects
         ▼
- ┌──────────────────────────┐
- │  Nutrition DB Lookup     │  ← nutrition_db.py
- │  local JSON → USDA API   │     3-tier: cache → local → API
- └──────────────────────────┘
-        │  {calories, protein, fat, carbs, serving_g}
+ ┌──────────────────┐
+ │ serving_estimate │  ← app/estimation.py (Bbox Area portion sizing)
+ └──────────────────┘
+        │ Bbox Area Ratio + standard serving grams
         ▼
- ┌──────────────────────────┐
- │  Tkinter UI              │  ← sidebar + progress bar + training popup
- └──────────────────────────┘
+ ┌──────────────────┐
+ │    nutrition     │  ← app/nutrition.py (nutrition_db JSON + USDA API fallback)
+ └──────────────────┘
+        │ {calories, protein, fat, carbs, fiber, sugar, sodium}
+        ▼
+ ┌──────────────────┐
+ │    tracker UI    │  ← app/tracker.py & app/widgets.py (Tkinter frontend)
+ └──────────────────┘
 ```
 
 ---
 
-## 📁 Project Structure
+## 📁 Repository Structure
 
 ```
 food-calorie-detector/
-├── main.py                ← Application entry point (GUI + detection loop)
-├── nutrition_db.py        ← Nutrition lookup (local JSON + USDA API)
-├── nutrition_data.json    ← Local nutrition database (101 classes + extras)
-├── prepare_dataset.py     ← Dataset preparation (train/val split + YOLO labels)
-├── train_model.py         ← YOLOv8n training script
-├── requirements.txt       ← Python dependencies
-├── food-101-overview.ipynb← Exploratory notebook
-├── reference_images/      ← Sample images (apple, banana, orange)
-│   ├── apple/
-│   ├── banana/
-│   └── orange/
-├── models/                ← Trained model weights (auto-created)
-│   └── best.pt            ← Custom YOLOv8n (after training)
-├── food-101/              ← Dataset (auto-created by download/prepare scripts)
-│   ├── images/
-│   │   ├── train/         ← 80% split (12,000 images)
-│   │   └── val/           ← 20% split (3,000 images)
-│   └── labels/
-│       ├── train/
-│       └── val/
-├── LICENSE
-├── README.md
-└── .gitignore
+├── main.py                ← Production entry point
+├── app/                   ← Core application package
+│   ├── __init__.py
+│   ├── constants.py       ← Color palette, thresholds, and configuration
+│   ├── detector.py        ← YOLO inference, NMS duplicate merge, temporal filter
+│   ├── estimation.py      ← Portion size scaling and multiplier mapping
+│   ├── nutrition.py       ← Unified macros lookup
+│   ├── tracker.py         ← Main GUI application controller
+│   ├── widgets.py         ← Custom Tkinter views (cards, status bars)
+│   └── cli.py             ← Command-line output parser
+├── nutrition_data.json    ← Database containing macros for all 101 classes
+├── nutrition_db.py        ← Backwards-compatible lookup module
+├── train_model.py         ← Custom training pipeline (optimized hyperparameters)
+├── prepare_dataset.py     ← Dataset splitter and label generator
+├── evaluate_model.py      ← Accuracy, precision, recall, and mAP evaluation
+├── tests/                 ← Unit test suite
+│   ├── test_detector.py
+│   ├── test_estimation.py
+│   └── test_nutrition.py
+└── requirements.txt
 ```
-
----
-
-## 🎯 15 Training Classes
-
-The custom YOLO model is trained on these Food-101 classes:
-
-| # | Class | Calories (per 100g) |
-|---|---|---|
-| 0 | apple_pie | 237 kcal |
-| 1 | chicken_curry | 150 kcal |
-| 2 | chicken_wings | 290 kcal |
-| 3 | dumplings | 232 kcal |
-| 4 | french_toast | 229 kcal |
-| 5 | fried_calamari | 175 kcal |
-| 6 | fried_rice | 163 kcal |
-| 7 | garlic_bread | 287 kcal |
-| 8 | hamburger | 295 kcal |
-| 9 | hot_and_sour_soup | 40 kcal |
-| 10 | omelette | 154 kcal |
-| 11 | pancakes | 227 kcal |
-| 12 | pizza | 266 kcal |
-| 13 | samosa | 262 kcal |
-| 14 | spring_rolls | 200 kcal |
 
 ---
 
 ## 🛠️ Installation & Setup
 
-### Prerequisites
-Python 3.9+ is required.
+1. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-```bash
-pip install -r requirements.txt
-```
+2. **Run GUI (live webcam mode)**:
+   ```bash
+   python main.py
+   ```
 
-### Run the App
+3. **Run CLI (static file analysis)**:
+   ```bash
+   python main.py reference_images/apple/sample.jpg
+   ```
 
-```bash
-python main.py
-```
-
-### Train the Custom Model (Optional)
-
-```bash
-# Step 1: Prepare dataset (train/val split + labels)
-python prepare_dataset.py
-
-# Step 2: Train YOLOv8n (GPU recommended)
-python train_model.py
-```
-
-Training parameters: `epochs=20, imgsz=224, batch=16, patience=5`
-
-> **Tip**: CPU training takes 5-7 hours. Use Google Colab (free GPU) for faster training, then copy `best.pt` to `models/`.
+4. **Run Unit Tests**:
+   ```bash
+   python -m unittest discover -s tests
+   ```
 
 ---
 
-## 🌐 USDA API (Optional)
+## ⚙️ Model Training & Augmentation (M1)
 
-For live nutrition data beyond the local database, obtain a free API key at
-[fdc.nal.usda.gov](https://fdc.nal.usda.gov/api-guide.html) and set:
-
-```bash
-set USDA_API_KEY=your_key_here   # Windows
-```
-
-Without a key, `DEMO_KEY` is used (1 000 requests/hour, no registration needed).
+Our training pipeline in `train_model.py` is configured with production-grade hyperparameter tuning:
+- **Image Size (`imgsz=416`)**: Larger canvas size for improved object detail recognition.
+- **Augmentation Suite**: Includes MixUp (0.1) and Mosaic (1.0) combinations to make the model robust to scale variations and overlap.
+- **Cosine Learning Rate Scheduler (`cos_lr=True`)**: Better convergence across the training runs.
+- **Early Stopping Patience (`patience=10`)**: Automatic halt when validation performance plateaus.
 
 ---
 
-## 🔧 Configuration
+## 🔮 Future Roadmap & Architecture (L2)
 
-| Variable | Default | Description |
-|---|---|---|
-| `DAILY_GOAL` | `2000` | Daily kcal goal for progress bar |
-| `LOOP_INTERVAL_MS` | `33` | Detection loop interval in ms (~30 FPS ceiling) |
-| `USDA_API_KEY` env var | `DEMO_KEY` | USDA FoodData Central API key |
+For production expansion, the following feature designs are supported by our code structure:
+1. **Meal History Database**: Implement a local SQLite database to persist daily caloric logs.
+2. **Weekly Analytics**: Integrate `matplotlib` graphs inside the Tkinter GUI to visualize diet habits.
+3. **Report Generation**: Export daily summary reports to PDF or CSV format.
+4. **Cloud Synchronisation**: Establish REST client sync with a remote backend.
